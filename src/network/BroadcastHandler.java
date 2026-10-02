@@ -63,24 +63,34 @@ public class BroadcastHandler {
         }
     }
 
-    /** Gửi broadcast (ưu tiên Subnet Broadcast qua đúng card mạng netIf rồi đến 255.255.255.255). */
+    /**
+     * Gửi broadcast tới directed-broadcast của card đã chọn TRƯỚC, rồi tới
+     * directed-broadcast của MỌI card usable khác (chống chọn nhầm NIC khi máy
+     * nhiều card), cuối cùng là 255.255.255.255.
+     */
     public int send(ProtocolMessage msg) throws IOException {
         byte[] data = msg.serialize().getBytes(StandardCharsets.UTF_8);
         if (netIf != null) {
             try { socket.setNetworkInterface(netIf); } catch (Exception ignored) {}
         }
-        // 1. Gửi Subnet-directed broadcast của card mạng đã chọn (bắt buộc cho IP tĩnh không gateway)
-        if (netIf != null) {
-            for (java.net.InterfaceAddress ia : netIf.getInterfaceAddresses()) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        java.util.List<NetworkInterface> nics = new java.util.ArrayList<>();
+        if (netIf != null) nics.add(netIf);
+        for (NetworkInterface ni : PhysicalNetworkHelper.listUsableInterfaces()) {
+            if (netIf != null && ni.getName().equals(netIf.getName())) continue;
+            nics.add(ni);
+        }
+        for (NetworkInterface ni : nics) {
+            for (java.net.InterfaceAddress ia : ni.getInterfaceAddresses()) {
                 InetAddress bcast = ia.getBroadcast();
-                if (bcast != null && !bcast.getHostAddress().equals(BROADCAST_IP)) {
-                    try {
-                        socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
-                    } catch (Exception ignored) {}
-                }
+                if (bcast == null || !seen.add(bcast.getHostAddress())) continue;
+                if (bcast.getHostAddress().equals(BROADCAST_IP)) continue;
+                try {
+                    socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
+                } catch (Exception ignored) {}
             }
         }
-        // 2. Gửi thêm Limited Broadcast 255.255.255.255
+        // Cuối cùng: Limited Broadcast 255.255.255.255
         try {
             InetAddress target = InetAddress.getByName(BROADCAST_IP);
             socket.send(new DatagramPacket(data, data.length, target, BROADCAST_PORT));
