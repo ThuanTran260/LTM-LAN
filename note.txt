@@ -1,0 +1,3 @@
+netsh advfirewall firewall add rule name="Allow ICMPv4 Ping" dir=in action=allow protocol=icmpv4:8,any profile=any
+netsh advfirewall firewall add rule name="Java UDP Network Hub" dir=in action=allow protocol=UDP localport=5000-5010,7000,8000 profile=any
+netsh advfirewall set allprofiles state off
