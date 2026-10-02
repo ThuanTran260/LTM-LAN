@@ -8,7 +8,10 @@ echo ====================================================================
 echo Đang kiểm tra quyền Quản trị viên (Administrator)...
 echo ====================================================================
 
-net session >nul 2>&1
+REM LUU Y: kiem tra quyen bang fltmc (tuc thi, khong treo nhu "net session"
+REM von co the treo lau tren may co dich vu Server/SMB cham hoac loi mang).
+
+fltmc >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
     echo [LOI] BAN CHUA CHAY VOI QUYEN ADMINISTRATOR!
