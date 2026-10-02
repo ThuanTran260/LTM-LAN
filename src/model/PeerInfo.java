@@ -9,7 +9,6 @@ public class PeerInfo {
     private final int unicastPort;
     private volatile long lastSeenMillis;
     private volatile int lastSeq = -1;
-    private volatile int lastBroadcastSeq = -1;
 
     public PeerInfo(String name, String ip, int unicastPort) {
         this.name = name;
@@ -23,11 +22,9 @@ public class PeerInfo {
     public int getUnicastPort() { return unicastPort; }
     public long getLastSeenMillis() { return lastSeenMillis; }
     public int getLastSeq() { return lastSeq; }
-    public int getLastBroadcastSeq() { return lastBroadcastSeq; }
 
     public void setLastSeenMillis(long t) { this.lastSeenMillis = t; }
     public void setLastSeq(int s) { this.lastSeq = s; }
-    public void setLastBroadcastSeq(int s) { this.lastBroadcastSeq = s; }
 
     /** Số giây kể từ lần thấy cuối cùng. */
     public long secondsSinceSeen() {

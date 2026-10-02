@@ -6,19 +6,18 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Slide 2: kênh Broadcast cổng 7000 (255.255.255.255 và Subnet Broadcast).
- * Sử dụng MulticastSocket để bind chính xác card mạng netIf khi gửi gói tin.
+ * Slide 2: kênh Broadcast cổng 7000 (255.255.255.255).
+ * Dùng SO_REUSEADDR để nhiều instance (Alice/Bob/Charlie) cùng chạy trên 1 máy khi demo.
  */
 public class BroadcastHandler {
     public static final int BROADCAST_PORT = 7000;
     public static final String BROADCAST_IP = "255.255.255.255";
 
-    private final MulticastSocket socket;
+    private final DatagramSocket socket;
     private final MessageListener listener;
     private volatile boolean running = false;
     private Thread worker;
@@ -28,12 +27,10 @@ public class BroadcastHandler {
     public BroadcastHandler(NetworkInterface netIf, MessageListener listener) throws IOException {
         this.netIf = netIf;
         this.listener = listener;
-        MulticastSocket s = new MulticastSocket(null);
+        DatagramSocket s = new DatagramSocket(null);
         s.setReuseAddress(true);
+        s.setBroadcast(true);
         s.bind(new InetSocketAddress(BROADCAST_PORT));
-        if (netIf != null) {
-            try { s.setNetworkInterface(netIf); } catch (Exception ignored) {}
-        }
         this.socket = s;
     }
 
@@ -63,64 +60,25 @@ public class BroadcastHandler {
         }
     }
 
-    /**
-     * Gửi broadcast tới directed-broadcast của card đã chọn TRƯỚC, rồi tới
-     * directed-broadcast của MỌI card usable khác (chống chọn nhầm NIC khi máy
-     * nhiều card), cuối cùng là 255.255.255.255.
-     */
+    /** Gửi broadcast (cả 255.255.255.255 và Subnet Broadcast VD: 192.168.1.255). Trả về số byte đã gửi. */
     public int send(ProtocolMessage msg) throws IOException {
         byte[] data = msg.serialize().getBytes(StandardCharsets.UTF_8);
-        if (netIf != null) {
-            try { socket.setNetworkInterface(netIf); } catch (Exception ignored) {}
-        }
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        java.util.List<NetworkInterface> nics = new java.util.ArrayList<>();
-        if (netIf != null) nics.add(netIf);
-        for (NetworkInterface ni : PhysicalNetworkHelper.listUsableInterfaces()) {
-            if (netIf != null && ni.getName().equals(netIf.getName())) continue;
-            nics.add(ni);
-        }
-        for (NetworkInterface ni : nics) {
-            for (java.net.InterfaceAddress ia : ni.getInterfaceAddresses()) {
-                InetAddress bcast = ia.getBroadcast();
-                if (bcast == null || !seen.add(bcast.getHostAddress())) continue;
-                if (bcast.getHostAddress().equals(BROADCAST_IP)) continue;
-                try {
-                    socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
-                } catch (Exception ignored) {}
-            }
-        }
-        // Cuối cùng: Limited Broadcast 255.255.255.255
+        // 1. Gửi Limited Broadcast 255.255.255.255
         try {
             InetAddress target = InetAddress.getByName(BROADCAST_IP);
             socket.send(new DatagramPacket(data, data.length, target, BROADCAST_PORT));
         } catch (Exception ignored) {}
 
-        return data.length;
-    }
-
-    /**
-     * Gửi heartbeat định kỳ: CHỈ tới directed-broadcast của card đã chọn
-     * (1 gói duy nhất, không fan-out) để giữ nền broadcast yên tĩnh khi lớp có 4-5 máy.
-     * Nếu card không có địa chỉ broadcast thì fallback về 255.255.255.255.
-     */
-    public int sendSelected(ProtocolMessage msg) throws IOException {
-        byte[] data = msg.serialize().getBytes(StandardCharsets.UTF_8);
-        boolean sent = false;
+        // 2. Gửi tiếp tới Subnet-directed broadcast của card mạng đã chọn (đặc biệt quan trọng khi đặt IP tĩnh)
         if (netIf != null) {
-            try { socket.setNetworkInterface(netIf); } catch (Exception ignored) {}
             for (java.net.InterfaceAddress ia : netIf.getInterfaceAddresses()) {
                 InetAddress bcast = ia.getBroadcast();
-                if (bcast == null || bcast.getHostAddress().equals(BROADCAST_IP)) continue;
-                try {
-                    socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
-                    sent = true;
-                } catch (Exception ignored) {}
+                if (bcast != null && !bcast.getHostAddress().equals(BROADCAST_IP)) {
+                    try {
+                        socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
+                    } catch (Exception ignored) {}
+                }
             }
-        }
-        if (!sent) {
-            socket.send(new DatagramPacket(data, data.length,
-                    InetAddress.getByName(BROADCAST_IP), BROADCAST_PORT));
         }
         return data.length;
     }

@@ -158,15 +158,13 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
         // Join phòng mặc định 1 rồi gửi DISCOVER
         doJoinRoom(MulticastHandler.DEFAULT_ROOMS[0]);
         sendControl(ProtocolMessage.DISCOVER, "");
-        scanSubnetUnicast();
         chat("[" + now() + "] [HỆ THỐNG] " + localName + " đã tham gia mạng (Unicast:" + localPort + ").");
 
-        heartbeatTimer = new Timer(10000, e -> {
-            sendHeartbeat();
+        heartbeatTimer = new Timer(5000, e -> {
+            sendControl(ProtocolMessage.HEARTBEAT, "");
             // Nếu chưa tìm thấy peer nào, tiếp tục phát broadcast DISCOVER để tìm lại máy khác
             if (peers.isEmpty()) {
                 sendControl(ProtocolMessage.DISCOVER, "");
-                scanSubnetUnicast();
             }
             // Gửi Unicast Heartbeat trực tiếp tới các peer đã biết để duy trì kết nối bền vững
             for (PeerInfo p : peers.values()) {
@@ -198,7 +196,6 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
     }
 
     // ================= GỬI TIN =================
-    /** Gói điều khiển fan-out đầy đủ (DISCOVER/LEAVE): tới mọi subnet + 255.255.255.255. */
     private void sendControl(String type, String payload) {
         if (!started) return;
         ProtocolMessage msg = new ProtocolMessage(type, 0, System.currentTimeMillis(), localName, localPort, payload);
@@ -208,55 +205,11 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
         } catch (IOException ignored) {}
     }
 
-    /** Heartbeat định kỳ: 1 gói duy nhất qua card đã chọn (giữ nền broadcast yên tĩnh). */
-    private void sendHeartbeat() {
-        if (!started) return;
-        ProtocolMessage msg = new ProtocolMessage(ProtocolMessage.HEARTBEAT, 0,
-                System.currentTimeMillis(), localName, localPort, "");
-        try {
-            int n = broadcast.sendSelected(msg);
-            stats.addTx(PhysicalNetworkHelper.estimateFrameLen(n));
-        } catch (IOException ignored) {}
-    }
-
     @Override
     public void onScan() {
         if (!started) return;
         chat("[" + now() + "] [QUÉT MẠNG] Đang phát gói tin Discovery quét toàn mạng LAN...");
         sendControl(ProtocolMessage.DISCOVER, "");
-        scanSubnetUnicast();
-    }
-
-    /**
-     * Quét nhanh các IP trong cùng subnet (1..50) bằng gói Unicast DISCOVER cổng 5001.
-     * Giải quyết triệt để vấn đề Router/Switch chặn gói Broadcast hoặc Windows định tuyến broadcast sai card mạng.
-     */
-    private void scanSubnetUnicast() {
-        if (!started || localNic == null || unicast == null) return;
-        InetAddress ipv4 = PhysicalNetworkHelper.getIPv4(localNic);
-        if (ipv4 == null) return;
-        String host = ipv4.getHostAddress();
-        int lastDot = host.lastIndexOf('.');
-        if (lastDot <= 0) return;
-        String prefix = host.substring(0, lastDot + 1);
-        int myLastByte;
-        try {
-            myLastByte = Integer.parseInt(host.substring(lastDot + 1));
-        } catch (NumberFormatException e) {
-            return;
-        }
-
-        new Thread(() -> {
-            ProtocolMessage disc = new ProtocolMessage(ProtocolMessage.DISCOVER, 0,
-                    System.currentTimeMillis(), localName, localPort, "auto-subnet-scan");
-            for (int i = 1; i <= 50; i++) {
-                if (i == myLastByte) continue;
-                try {
-                    InetAddress target = InetAddress.getByName(prefix + i);
-                    unicast.send(target, 5001, disc);
-                } catch (Exception ignored) {}
-            }
-        }, "Subnet-Scanner").start();
     }
 
     /** Lấy SEQ cho tin chat; nếu bật mô phỏng mất gói thì nhảy cóc 1 số và tự tắt checkbox. */
@@ -379,12 +332,6 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
             int n = broadcast.send(msg);
             int frameLen = PhysicalNetworkHelper.estimateFrameLen(n);
             stats.addTx(frameLen);
-            // Gửi dự phòng Unicast tới toàn bộ peer đã biết (đảm bảo 100% nhận được kể cả khi switch chặn broadcast)
-            for (PeerInfo p : peers.values()) {
-                try {
-                    unicast.send(InetAddress.getByName(p.getIp()), p.getUnicastPort(), msg);
-                } catch (Exception ignored) {}
-            }
             showOutFrame(frameLen, localMac, PhysicalNetworkHelper.BROADCAST_MAC, "MAC Broadcast",
                     "UDP DATAGRAM", "[BROADCAST #" + msg.getSeq() + "] " + localName + ": " + msg.getPayload());
             chat("[" + now() + "] [BROADCAST #" + msg.getSeq() + "] " + localName + ": " + msg.getPayload());
@@ -467,31 +414,14 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
                 stats.addTx(PhysicalNetworkHelper.estimateFrameLen(
                         ack.serialize().getBytes(StandardCharsets.UTF_8).length));
             } catch (IOException ignored) {}
-        } else if (ProtocolMessage.BROADCAST.equals(msg.getType())) {
-            processIncomingBroadcast(msg, addr, frameLen);
         }
-    }
-
-    private void processIncomingBroadcast(ProtocolMessage msg, InetAddress addr, int frameLen) {
-        touchPeer(msg, addr);
-        String key = msg.getSender() + "@" + addr.getHostAddress() + ":" + msg.getUnicastPort();
-        PeerInfo p = peers.get(key);
-        if (p != null) {
-            if (p.getLastBroadcastSeq() == msg.getSeq()) return; // Bỏ qua gói tin trùng lặp giữa 2 kênh
-            p.setLastBroadcastSeq(msg.getSeq());
-        }
-        checkLoss(msg);
-        showInFrame(frameLen, PhysicalNetworkHelper.pseudoMacFromIp(addr.getHostAddress()),
-                PhysicalNetworkHelper.BROADCAST_MAC, "UDP DATAGRAM",
-                "[BROADCAST #" + msg.getSeq() + "] " + msg.getSender() + ": " + msg.getPayload());
-        chat("[" + now() + "] [BROADCAST #" + msg.getSeq() + "] " + msg.getSender() + ": " + msg.getPayload());
     }
 
     private void onBroadcast(ProtocolMessage msg, InetAddress addr, int datagramLen) {
         int frameLen = PhysicalNetworkHelper.estimateFrameLen(datagramLen);
         stats.addRx(frameLen);
-        if (isSelf(msg, addr)) return; // bỏ loopback của chính mình (không đếm vào bão mạng)
         stats.noteBroadcastRx();
+        if (isSelf(msg, addr)) return; // bỏ loopback của chính mình
         String dst = PhysicalNetworkHelper.BROADCAST_MAC;
         switch (msg.getType()) {
             case ProtocolMessage.DISCOVER:
@@ -523,7 +453,11 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
                 }
                 break;
             case ProtocolMessage.BROADCAST:
-                processIncomingBroadcast(msg, addr, frameLen);
+                touchPeer(msg, addr);
+                checkLoss(msg);
+                showInFrame(frameLen, PhysicalNetworkHelper.pseudoMacFromIp(addr.getHostAddress()), dst,
+                        "UDP DATAGRAM", "[BROADCAST #" + msg.getSeq() + "] " + msg.getSender() + ": " + msg.getPayload());
+                chat("[" + now() + "] [BROADCAST #" + msg.getSeq() + "] " + msg.getSender() + ": " + msg.getPayload());
                 break;
             case ProtocolMessage.LEAVE:
                 PeerInfo removed = removePeer(msg, addr);
@@ -593,7 +527,7 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
 
     private void prunePeers() {
         long nowMs = System.currentTimeMillis();
-        peers.entrySet().removeIf(e -> nowMs - e.getValue().getLastSeenMillis() > 30000);
+        peers.entrySet().removeIf(e -> nowMs - e.getValue().getLastSeenMillis() > 20000);
         SwingUtilities.invokeLater(this::refreshPeerList);
     }
 
