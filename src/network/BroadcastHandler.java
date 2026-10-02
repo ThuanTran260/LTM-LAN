@@ -99,6 +99,32 @@ public class BroadcastHandler {
         return data.length;
     }
 
+    /**
+     * Gửi heartbeat định kỳ: CHỈ tới directed-broadcast của card đã chọn
+     * (1 gói duy nhất, không fan-out) để giữ nền broadcast yên tĩnh khi lớp có 4-5 máy.
+     * Nếu card không có địa chỉ broadcast thì fallback về 255.255.255.255.
+     */
+    public int sendSelected(ProtocolMessage msg) throws IOException {
+        byte[] data = msg.serialize().getBytes(StandardCharsets.UTF_8);
+        boolean sent = false;
+        if (netIf != null) {
+            try { socket.setNetworkInterface(netIf); } catch (Exception ignored) {}
+            for (java.net.InterfaceAddress ia : netIf.getInterfaceAddresses()) {
+                InetAddress bcast = ia.getBroadcast();
+                if (bcast == null || bcast.getHostAddress().equals(BROADCAST_IP)) continue;
+                try {
+                    socket.send(new DatagramPacket(data, data.length, bcast, BROADCAST_PORT));
+                    sent = true;
+                } catch (Exception ignored) {}
+            }
+        }
+        if (!sent) {
+            socket.send(new DatagramPacket(data, data.length,
+                    InetAddress.getByName(BROADCAST_IP), BROADCAST_PORT));
+        }
+        return data.length;
+    }
+
     public void close() {
         running = false;
         socket.close();

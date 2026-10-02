@@ -161,8 +161,8 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
         scanSubnetUnicast();
         chat("[" + now() + "] [HỆ THỐNG] " + localName + " đã tham gia mạng (Unicast:" + localPort + ").");
 
-        heartbeatTimer = new Timer(5000, e -> {
-            sendControl(ProtocolMessage.HEARTBEAT, "");
+        heartbeatTimer = new Timer(10000, e -> {
+            sendHeartbeat();
             // Nếu chưa tìm thấy peer nào, tiếp tục phát broadcast DISCOVER để tìm lại máy khác
             if (peers.isEmpty()) {
                 sendControl(ProtocolMessage.DISCOVER, "");
@@ -198,11 +198,23 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
     }
 
     // ================= GỬI TIN =================
+    /** Gói điều khiển fan-out đầy đủ (DISCOVER/LEAVE): tới mọi subnet + 255.255.255.255. */
     private void sendControl(String type, String payload) {
         if (!started) return;
         ProtocolMessage msg = new ProtocolMessage(type, 0, System.currentTimeMillis(), localName, localPort, payload);
         try {
             int n = broadcast.send(msg);
+            stats.addTx(PhysicalNetworkHelper.estimateFrameLen(n));
+        } catch (IOException ignored) {}
+    }
+
+    /** Heartbeat định kỳ: 1 gói duy nhất qua card đã chọn (giữ nền broadcast yên tĩnh). */
+    private void sendHeartbeat() {
+        if (!started) return;
+        ProtocolMessage msg = new ProtocolMessage(ProtocolMessage.HEARTBEAT, 0,
+                System.currentTimeMillis(), localName, localPort, "");
+        try {
+            int n = broadcast.sendSelected(msg);
             stats.addTx(PhysicalNetworkHelper.estimateFrameLen(n));
         } catch (IOException ignored) {}
     }
@@ -478,8 +490,8 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
     private void onBroadcast(ProtocolMessage msg, InetAddress addr, int datagramLen) {
         int frameLen = PhysicalNetworkHelper.estimateFrameLen(datagramLen);
         stats.addRx(frameLen);
+        if (isSelf(msg, addr)) return; // bỏ loopback của chính mình (không đếm vào bão mạng)
         stats.noteBroadcastRx();
-        if (isSelf(msg, addr)) return; // bỏ loopback của chính mình
         String dst = PhysicalNetworkHelper.BROADCAST_MAC;
         switch (msg.getType()) {
             case ProtocolMessage.DISCOVER:
@@ -581,7 +593,7 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
 
     private void prunePeers() {
         long nowMs = System.currentTimeMillis();
-        peers.entrySet().removeIf(e -> nowMs - e.getValue().getLastSeenMillis() > 20000);
+        peers.entrySet().removeIf(e -> nowMs - e.getValue().getLastSeenMillis() > 30000);
         SwingUtilities.invokeLater(this::refreshPeerList);
     }
 
