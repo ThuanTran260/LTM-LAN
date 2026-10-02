@@ -27,27 +27,33 @@ public class LogicPanel extends JPanel {
         void onSendBroadcast(String text);
         void onSendMulticast(String text);
         void onJoinRoom(String groupIp);
+        void onScan();
     }
 
     private final DefaultListModel<String> peerModel = new DefaultListModel<>();
     private final JList<String> peerList = new JList<>(peerModel);
-    private final JLabel peerDetail = new JLabel("Chua chon peer.");
+    private final JLabel peerDetail = new JLabel("Chưa chọn peer.");
     private final JTextArea chatArea = new JTextArea();
     private final JTextField inputField = new JTextField();
-    private final JCheckBox dropPacketBox = new JCheckBox("Kich hoat \"Mo phong mat goi (Drop Next Packet)\"");
-    private final JLabel roomLabel = new JLabel("Dang o phong: (chua join)");
+    private final JCheckBox dropPacketBox = new JCheckBox("Kích hoạt \"Mô phỏng mất gói (Drop Next Packet)\"");
+    private final JLabel roomLabel = new JLabel("Đang ở phòng: (chưa join)");
     private final JTextField customRoomField = new JTextField(9);
     private LogicListener listener;
 
     public LogicPanel() {
         super(new BorderLayout(6, 6));
-        setBorder(BorderFactory.createTitledBorder("COT 1: UDP LOGIC (Tang Ung Dung & Giao Van)"));
+        setBorder(BorderFactory.createTitledBorder("CỘT 1: UDP LOGIC (Tầng Ứng Dụng & Giao Vận)"));
 
         // --- Peer list (top) ---
         peerList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         peerList.setVisibleRowCount(4);
-        JPanel peerPanel = new JPanel(new BorderLayout());
-        peerPanel.setBorder(BorderFactory.createTitledBorder("DANH SACH PEER ONLINE (tu dong phat hien qua Broadcast)"));
+        JPanel peerPanel = new JPanel(new BorderLayout(2, 2));
+        peerPanel.setBorder(BorderFactory.createTitledBorder("DANH SÁCH PEER ONLINE (Tự động phát hiện qua Broadcast)"));
+        JPanel peerTopBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        JButton scanBtn = new JButton("🔍 Quét Lại LAN");
+        scanBtn.addActionListener(e -> { if (listener != null) listener.onScan(); });
+        peerTopBar.add(scanBtn);
+        peerPanel.add(peerTopBar, BorderLayout.NORTH);
         peerPanel.add(new JScrollPane(peerList), BorderLayout.CENTER);
         peerPanel.add(peerDetail, BorderLayout.SOUTH);
 

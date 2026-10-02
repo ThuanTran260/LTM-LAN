@@ -162,6 +162,18 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
 
         heartbeatTimer = new Timer(5000, e -> {
             sendControl(ProtocolMessage.HEARTBEAT, "");
+            // Nếu chưa tìm thấy peer nào, tiếp tục phát broadcast DISCOVER để tìm lại máy khác
+            if (peers.isEmpty()) {
+                sendControl(ProtocolMessage.DISCOVER, "");
+            }
+            // Gửi Unicast Heartbeat trực tiếp tới các peer đã biết để duy trì kết nối bền vững
+            for (PeerInfo p : peers.values()) {
+                try {
+                    ProtocolMessage hb = new ProtocolMessage(ProtocolMessage.HEARTBEAT, 0,
+                            System.currentTimeMillis(), localName, localPort, "");
+                    unicast.send(InetAddress.getByName(p.getIp()), p.getUnicastPort(), hb);
+                } catch (Exception ignored) {}
+            }
             prunePeers();
         });
         heartbeatTimer.start();
@@ -193,6 +205,13 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
         } catch (IOException ignored) {}
     }
 
+    @Override
+    public void onScan() {
+        if (!started) return;
+        chat("[" + now() + "] [QUÉT MẠNG] Đang phát gói tin Discovery quét toàn mạng LAN...");
+        sendControl(ProtocolMessage.DISCOVER, "");
+    }
+
     /** Lấy SEQ cho tin chat; nếu bật mô phỏng mất gói thì nhảy cóc 1 số và tự tắt checkbox. */
     private int nextChatSeq() {
         if (logicPanel.isDropNextPacket()) {
@@ -207,7 +226,7 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
 
     /**
      * Lệnh đặc biệt gõ trong ô nhập tin (slide P2P — mục 5):
-     * /help, /list, /exit. Trả về true nếu đã xử lý (không gửi đi).
+     * /help, /list, /scan, /connect <IP>, /exit.
      */
     private boolean handleCommand(String text) {
         String cmd = text.trim();
@@ -215,23 +234,53 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
         String base = cmd.split("\\s+", 2)[0].toLowerCase();
         switch (base) {
             case "/help":
-                chat("[" + now() + "] [HELP] Lenh ho tro: /help (tro giup) | /list (liet ke peer online) | /exit (thoat, gui LEAVE)");
+                chat("[" + now() + "] [HELP] Lệnh hỗ trợ:");
+                chat("  - /list: Liệt kê danh sách peer online");
+                chat("  - /scan: Quét lại tìm các máy trong mạng LAN");
+                chat("  - /connect <IP> hoặc <IP:Port>: Kết nối Unicast trực tiếp (VD: /connect 192.168.1.20)");
+                chat("  - /exit: Thoát ứng dụng và gửi thông báo rời mạng");
                 break;
             case "/list":
                 if (peers.isEmpty()) {
-                    chat("[" + now() + "] [LIST] Chua phat hien peer nao. Cho heartbeat/discovery vai giay.");
+                    chat("[" + now() + "] [LIST] Chưa phát hiện peer nào. Đang tiếp tục quét mạng...");
                 } else {
                     chat("[" + now() + "] [LIST] Peer online (" + peers.size() + "):");
                     for (PeerInfo p : peers.values()) chat("  - " + p);
                 }
                 break;
+            case "/scan":
+                onScan();
+                break;
+            case "/connect":
+                String[] parts = cmd.split("\\s+");
+                if (parts.length < 2) {
+                    chat("[" + now() + "] [CONNECT] Cú pháp: /connect <IP> hoặc /connect <IP:Port> (VD: /connect 192.168.1.20)");
+                } else {
+                    String targetStr = parts[1].trim();
+                    String tIp = targetStr;
+                    int tPort = 5001;
+                    if (targetStr.contains(":")) {
+                        String[] ipPort = targetStr.split(":", 2);
+                        tIp = ipPort[0];
+                        try { tPort = Integer.parseInt(ipPort[1]); } catch (Exception ignored) {}
+                    }
+                    try {
+                        ProtocolMessage disc = new ProtocolMessage(ProtocolMessage.DISCOVER, 0,
+                                System.currentTimeMillis(), localName, localPort, "direct connect");
+                        unicast.send(InetAddress.getByName(tIp), tPort, disc);
+                        chat("[" + now() + "] [CONNECT] Đã gửi yêu cầu kết nối Unicast trực tiếp tới " + tIp + ":" + tPort + "!");
+                    } catch (Exception ex) {
+                        chat("[" + now() + "] [CONNECT LỖI] " + ex.getMessage());
+                    }
+                }
+                break;
             case "/exit":
-                chat("[" + now() + "] [EXIT] Dang thoat va gui LEAVE...");
+                chat("[" + now() + "] [EXIT] Đang thoát và gửi LEAVE...");
                 shutdown();
                 dispose();
                 break;
             default:
-                chat("[" + now() + "] [HE THONG] Lenh khong ho tro: " + base + ". Go /help de xem danh sach.");
+                chat("[" + now() + "] [HỆ THỐNG] Lệnh không hỗ trợ: " + base + ". Gõ /help để xem danh sách.");
                 break;
         }
         logicPanel.clearInput();
@@ -356,6 +405,15 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
             chat("[" + now() + "] [P2P #" + msg.getSeq() + "] " + msg.getSender() + " -> " + localName + ": " + msg.getPayload());
         } else if (ProtocolMessage.DISCOVER_ACK.equals(msg.getType())) {
             chat("[" + now() + "] [DISCOVERY] Phát hiện " + msg.getSender() + " (" + addr.getHostAddress() + ":" + msg.getUnicastPort() + ")");
+        } else if (ProtocolMessage.DISCOVER.equals(msg.getType())) {
+            chat("[" + now() + "] [DISCOVERY] Kết nối trực tiếp từ " + msg.getSender() + " (" + addr.getHostAddress() + ":" + msg.getUnicastPort() + ")");
+            ProtocolMessage ack = new ProtocolMessage(ProtocolMessage.DISCOVER_ACK, 0,
+                    System.currentTimeMillis(), localName, localPort, "hello " + msg.getSender());
+            try {
+                unicast.send(addr, msg.getUnicastPort(), ack);
+                stats.addTx(PhysicalNetworkHelper.estimateFrameLen(
+                        ack.serialize().getBytes(StandardCharsets.UTF_8).length));
+            } catch (IOException ignored) {}
         }
     }
 
@@ -381,7 +439,18 @@ public class MainFrame extends JFrame implements LogicPanel.LogicListener {
                 } catch (IOException ignored) {}
                 break;
             case ProtocolMessage.HEARTBEAT:
+                boolean isNew = !peers.containsKey(msg.getSender() + "@" + addr.getHostAddress() + ":" + msg.getUnicastPort());
                 touchPeer(msg, addr);
+                if (isNew) {
+                    // Nếu là peer mới xuất hiện trong mạng mà bên kia chưa lưu mình, gửi ngay 1 gói Unicast chào hỏi
+                    ProtocolMessage hbAck = new ProtocolMessage(ProtocolMessage.DISCOVER_ACK, 0,
+                            System.currentTimeMillis(), localName, localPort, "hello " + msg.getSender());
+                    try {
+                        unicast.send(addr, msg.getUnicastPort(), hbAck);
+                        stats.addTx(PhysicalNetworkHelper.estimateFrameLen(
+                                hbAck.serialize().getBytes(StandardCharsets.UTF_8).length));
+                    } catch (IOException ignored) {}
+                }
                 break;
             case ProtocolMessage.BROADCAST:
                 touchPeer(msg, addr);
