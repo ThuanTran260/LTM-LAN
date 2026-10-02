@@ -14,3 +14,6 @@ bin/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Agent skills & config
+.agents/

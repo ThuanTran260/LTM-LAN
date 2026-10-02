@@ -26,7 +26,7 @@ public final class PhysicalNetworkHelper {
 
     private PhysicalNetworkHelper() {}
 
-    /** Liệt kê các card mạng đang UP, không loopback, có IPv4. */
+    /** Liệt kê các card mạng đang UP, không loopback, có IPv4 (ưu tiên card thật & dải 192.168.1.x lên đầu). */
     public static List<NetworkInterface> listUsableInterfaces() {
         List<NetworkInterface> out = new ArrayList<>();
         try {
@@ -40,7 +40,31 @@ public final class PhysicalNetworkHelper {
                 } catch (SocketException ignored) {}
             }
         } catch (SocketException ignored) {}
+        out.sort((a, b) -> Integer.compare(scoreInterface(b), scoreInterface(a)));
         return out;
+    }
+
+    private static int scoreInterface(NetworkInterface ni) {
+        int score = 0;
+        String desc = (ni.getName() + " " + ni.getDisplayName()).toLowerCase();
+        InetAddress ip = getIPv4(ni);
+        String ipStr = ip != null ? ip.getHostAddress() : "";
+
+        // Ưu tiên cao nhất: dải 192.168.1.X của bài tập phòng lab
+        if (ipStr.startsWith("192.168.1.")) score += 2000;
+        else if (ip != null && ip.isSiteLocalAddress()) score += 500;
+
+        // Ưu tiên card vật lý thật
+        if (desc.contains("wi-fi") || desc.contains("wireless") || desc.contains("wlan")) score += 400;
+        if (desc.contains("ethernet") || desc.contains("gbe") || desc.contains("realtek") || desc.contains("intel")) score += 400;
+
+        // Hạ điểm các loại card ảo / VPN xuống thấp nhất
+        if (desc.contains("radmin") || desc.contains("virtualbox") || desc.contains("vmware") ||
+            desc.contains("hyper-v") || desc.contains("vethernet") || desc.contains("tap") ||
+            desc.contains("vpn") || desc.contains("bluetooth")) {
+            score -= 1500;
+        }
+        return score;
     }
 
     /** IPv4 đầu tiên của card (ưu tiên site-local). */
